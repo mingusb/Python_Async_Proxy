@@ -33,6 +33,8 @@ cdef bytes RESP_407 = (
 cdef bytes RESP_502 = b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
 cdef int SOCK_BUF_SIZE = 131072
 cdef int SOCKET_BUF_BYTES = 1 << 20
+_batch = None
+_ENABLE_BATCH = os.environ.get("USE_BATCH", "0") == "1"
 visits = Counter()
 cdef unsigned long bw = 0
 cdef unsigned long total_requests = 0
@@ -55,6 +57,12 @@ try:
         _splicer.init_splice_pipe()
 except Exception:
     _splicer = None
+
+try:
+    if _ENABLE_BATCH:
+        _batch = ctypes.CDLL(str(Path(__file__).with_name("batch_helper.so")))
+except Exception:
+    _batch = None
 
 # Helper functions
 cdef str format_bw(unsigned long xfered):
