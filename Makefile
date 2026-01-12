@@ -16,3 +16,6 @@ build:
 	@python setup.py build_ext --inplace
 
 .PHONY: bench http-bench connect-bench update-readme smoke build
+
+bench-all:
+	@bash scripts/bench_matrix.sh
