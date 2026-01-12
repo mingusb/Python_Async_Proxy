@@ -93,6 +93,36 @@ def parse_connect_log(path: Path):
     return results
 
 
+def parse_c10k_log(path: Path):
+    text = strip_ansi(path.read_text(errors="ignore"))
+    sweep = {}
+    current = None
+    for line in text.splitlines():
+        if line.startswith("=== C="):
+            import re
+
+            m = re.search(r"C=([0-9]+)", line)
+            current = int(m.group(1)) if m else None
+            continue
+        if current is None:
+            continue
+        if "Requests/sec:" in line:
+            try:
+                rps = float(line.split(":")[1].strip())
+            except Exception:
+                rps = 0.0
+            sweep[current] = rps
+            current = None
+    if not sweep:
+        return {}
+    best_c = max(sweep, key=lambda k: sweep[k])
+    data = {"best_c": best_c, "best_rps": sweep[best_c]}
+    if 10000 in sweep:
+        data["c10k"] = sweep[10000]
+    data["sweep"] = sweep
+    return data
+
+
 def replace_block(content: str, marker: str, new_block: str) -> str:
     start = f"<!-- {marker}_START -->"
     end = f"<!-- {marker}_END -->"
@@ -134,16 +164,33 @@ def main():
     http_log = Path(sys.argv[1])
     connect_log = Path(sys.argv[2])
     readme_path = Path(sys.argv[3])
+    c10k_log = Path(sys.argv[4]) if len(sys.argv) > 4 else Path("bench_c10k.log")
 
     http_results = parse_http_log(http_log)
     connect_results = parse_connect_log(connect_log)
+    c10k_results = parse_c10k_log(c10k_log) if c10k_log.exists() else {}
 
     readme = readme_path.read_text()
     http_block = format_http_block(http_results)
     connect_block = format_connect_block(connect_results)
+    if c10k_results:
+        sweep_lines = []
+        for c, r in sorted(c10k_results.get("sweep", {}).items()):
+            sweep_lines.append(f"C={c}: wrk {r:,.2f} req/s")
+        c10k_block = "\n".join(
+            [
+                f"- best: wrk {c10k_results['best_rps']:,.2f} req/s at C={c10k_results['best_c']}",
+                f"- C=10000: wrk {c10k_results.get('c10k','n/a')}",
+                "- sweep:",
+                *[f"  - {line}" for line in sweep_lines],
+            ]
+        )
+    else:
+        c10k_block = "- not run yet"
 
     readme = replace_block(readme, "HTTP_RESULTS", http_block)
     readme = replace_block(readme, "CONNECT_RESULTS", connect_block)
+    readme = replace_block(readme, "C10K_RESULTS", c10k_block)
 
     readme_path.write_text(readme)
 

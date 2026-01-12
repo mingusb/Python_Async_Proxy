@@ -35,6 +35,7 @@ To run the benchmark:
 - To offload the relay hot path into C (poll + splice fallback), set `USE_C_RELAY=1` (built via `make build`). This is optional; the fastest mode is chosen automatically by `make bench-all`.
 - `USE_C_RELAY` can also set `CRELAY_THREADS=<n>` to grow the thread pool used to run C relays in parallel.
 - If you want each worker pinned to a CPU (for lower cache thrash), set `PIN_WORKERS=1` alongside `WORKERS>1`.
+- For a high-concurrency sweep (including C10K), run `make bench-c10k`. Tweak `CONC_LIST="1000 5000 10000 15000"` and `PROXY_ENV="WORKERS=4 PIN_WORKERS=1"` as needed; the script always reports the 10K-concurrency result and the peak observed.
 
 ### Verifying that traffic is flowing
 
@@ -68,3 +69,15 @@ The output includes `wrk` and `siege`. On this machine with the steps above (uvl
 - CONNECT 128KB binary (/payload_128k.bin): 374.53 req/s, transfer 46.82 MB/s
 - CONNECT 1024KB binary (/payload_1024k.bin): 281.49 req/s, transfer 281.49 MB/s
 <!-- CONNECT_RESULTS_END -->
+
+**C10K sweep (wrk only)**
+
+<!-- C10K_RESULTS_START -->
+- best: wrk 1,743.01 req/s at C=1000
+- C=10000: wrk 898.55
+- sweep:
+  - C=1000: wrk 1,743.01 req/s
+  - C=5000: wrk 1,408.40 req/s
+  - C=10000: wrk 898.55 req/s
+  - C=15000: wrk 523.61 req/s
+<!-- C10K_RESULTS_END -->
