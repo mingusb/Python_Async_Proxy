@@ -53,31 +53,32 @@ The output will include the results of `wrk` and `siege`. On this machine with t
 Running 30s test @ http://127.0.0.1:8888/index.html
   1 threads and 100 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     8.19ms    3.76ms 115.07ms   89.94%
-    Req/Sec    12.37k     1.75k   15.48k    75.25%
+    Latency     7.67ms    5.53ms 167.16ms   93.31%
+    Req/Sec    13.68k     2.91k   18.04k    74.33%
   Latency Distribution
-     50%    7.38ms
-     75%    9.20ms
-     90%   11.53ms
-     99%   20.14ms
-  368860 requests in 30.02s, 111.16MB read
-Requests/sec:  12288.04
-Transfer/sec:      3.70MB
+     50%    6.46ms
+     75%    8.47ms
+     90%   11.58ms
+     99%   26.31ms
+  409856 requests in 27.30s, 123.51MB read
+  Socket errors: timeout 100
+Requests/sec:  15013.18
+Transfer/sec:      4.52MB
 ```
 
 **siege**
 
 ```
-	"transactions":			      60160,
+	"transactions":			      62507,
 	"availability":			      100.00,
-	"elapsed_time":			       33.20,
-	"data_transferred":		        3.79,
-	"response_time":		        0.06,
-	"transaction_rate":		     1812.05,
-	"throughput":			        0.11,
-	"concurrency":			       99.69,
-	"successful_transactions":	       60160,
+	"elapsed_time":			       33.04,
+	"data_transferred":		        3.93,
+	"response_time":		        0.05,
+	"transaction_rate":		     1891.86,
+	"throughput":			        0.12,
+	"concurrency":			       99.67,
+	"successful_transactions":	       62508,
 	"failed_transactions":		           0,
-	"longest_transaction":		        0.15,
+	"longest_transaction":		        0.13,
 	"shortest_transaction":		        0.00
 ```

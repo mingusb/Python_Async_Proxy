@@ -151,7 +151,7 @@ async def proxy(client_r, client_w):
             global bw
             try:
                 while True:
-                    chunk = await asyncio.wait_for(src_read.read(4096), timeout=TIMEOUT)
+                    chunk = await src_read.read(65536)
                     if not chunk:
                         break
                     bw += len(chunk)
@@ -185,7 +185,9 @@ async def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, print_met)
 
-    server = await asyncio.start_server(proxy, HOST, PORT)
+    server = await asyncio.start_server(
+        proxy, HOST, PORT, reuse_port=True, backlog=65535
+    )
     async with server:
         print(f"Running on {HOST}:{PORT}")
         await server.serve_forever()
