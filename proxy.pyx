@@ -36,6 +36,7 @@ cdef bytes RESP_502 = b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
 cdef int SOCK_BUF_SIZE = 131072
 cdef int SOCKET_BUF_BYTES = 1 << 20
 WORKERS = int(os.environ.get("WORKERS", "1"))
+PIN_WORKERS = os.environ.get("PIN_WORKERS", "0") == "1"
 _batch = None
 _ENABLE_BATCH = os.environ.get("USE_BATCH", "0") == "1"
 _ENABLE_ZC = os.environ.get("USE_ZEROCOPY", "0") == "1"
@@ -467,6 +468,12 @@ def _run_workers():
         pid = os.fork()
         if pid == 0:
             try:
+                if PIN_WORKERS and hasattr(os, "sched_setaffinity"):
+                    try:
+                        cpu_count = os.cpu_count() or 1
+                        os.sched_setaffinity(0, {(_ % cpu_count)})
+                    except Exception:
+                        pass
                 if uvloop is not None:
                     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
                 asyncio.run(main())

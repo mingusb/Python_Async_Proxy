@@ -34,6 +34,7 @@ To run the benchmark:
 - To fan out across CPU cores, set `WORKERS=<n>` (SO_REUSEPORT forked workers). The bench matrix (`make bench-all`) will also try `WORKERS_BENCH` (default 4) alongside other modes and pick the fastest run.
 - To offload the relay hot path into C (poll + splice fallback), set `USE_C_RELAY=1` (built via `make build`). This is optional; the fastest mode is chosen automatically by `make bench-all`.
 - `USE_C_RELAY` can also set `CRELAY_THREADS=<n>` to grow the thread pool used to run C relays in parallel.
+- If you want each worker pinned to a CPU (for lower cache thrash), set `PIN_WORKERS=1` alongside `WORKERS>1`.
 
 ### Verifying that traffic is flowing
 
@@ -51,19 +52,19 @@ sudo tail -n 5 /var/log/nginx/access.log   # should show 200 responses for /inde
 The output includes `wrk` and `siege`. On this machine with the steps above (uvloop + `-O3 -march=native` build) at 100 concurrency and 5s per payload (set via `DURATION=5`), the proxy returns HTTP 200s and the backend access log increments accordingly.
 
 <!-- HTTP_RESULTS_START -->
-- small (HTML) (/index.html): wrk 10,876.48 req/s (p50 8.86ms, p99 41.3ms); siege 1,669.60 trans/s, throughput 0.11 MB/sec
-- 1KB binary (/payload_1k.bin): wrk 9,943.98 req/s (p50 9.56ms, p99 94.15ms); siege 1,594.80 trans/s, throughput 1.56 MB/sec
-- 16KB binary (/payload_16k.bin): wrk 6,255.64 req/s (p50 15.45ms, p99 62.21ms); siege 984.76 trans/s, throughput 15.39 MB/sec
-- 128KB binary (/payload_128k.bin): wrk 2,488.53 req/s (p50 37.19ms, p99 495.4ms); siege 829.66 trans/s, throughput 103.71 MB/sec
-- 1024KB binary (/payload_1024k.bin): wrk 459.31 req/s (p50 211.49ms, p99 895.45ms); siege 264.13 trans/s, throughput 264.13 MB/sec
+- small (HTML) (/index.html): wrk 28,216.40 req/s (p50 3.24ms, p99 10.45ms); siege 4,061.90 trans/s, throughput 0.26 MB/sec
+- 1KB binary (/payload_1k.bin): wrk 25,993.51 req/s (p50 3.46ms, p99 10.76ms); siege 4,120.40 trans/s, throughput 4.02 MB/sec
+- 16KB binary (/payload_16k.bin): wrk 17,002.71 req/s (p50 5.09ms, p99 15.28ms); siege 3,381.71 trans/s, throughput 52.84 MB/sec
+- 128KB binary (/payload_128k.bin): wrk 6,739.34 req/s (p50 11.49ms, p99 31.57ms); siege 1,875.13 trans/s, throughput 234.39 MB/sec
+- 1024KB binary (/payload_1024k.bin): wrk 983.22 req/s (p50 78.61ms, p99 176.76ms); siege 415.80 trans/s, throughput 415.80 MB/sec
 <!-- HTTP_RESULTS_END -->
 
 **HTTPS CONNECT (via proxy to local nginx SSL on :8443)**
 
 <!-- CONNECT_RESULTS_START -->
-- CONNECT HTML (/index.html): 268.64 req/s, transfer 0.02 MB/s
-- CONNECT 1KB binary (/payload_1k.bin): 277.97 req/s, transfer 0.27 MB/s
-- CONNECT 16KB binary (/payload_16k.bin): 308.88 req/s, transfer 4.83 MB/s
-- CONNECT 128KB binary (/payload_128k.bin): 280.31 req/s, transfer 35.04 MB/s
-- CONNECT 1024KB binary (/payload_1024k.bin): 168.42 req/s, transfer 168.42 MB/s
+- CONNECT HTML (/index.html): 611.62 req/s, transfer 0.04 MB/s
+- CONNECT 1KB binary (/payload_1k.bin): 416.67 req/s, transfer 0.41 MB/s
+- CONNECT 16KB binary (/payload_16k.bin): 341.30 req/s, transfer 5.33 MB/s
+- CONNECT 128KB binary (/payload_128k.bin): 374.53 req/s, transfer 46.82 MB/s
+- CONNECT 1024KB binary (/payload_1024k.bin): 281.49 req/s, transfer 281.49 MB/s
 <!-- CONNECT_RESULTS_END -->
