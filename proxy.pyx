@@ -5,6 +5,9 @@ import signal
 import socket
 import sys
 import time
+import os
+import ctypes
+from pathlib import Path
 from collections import Counter
 
 try:
@@ -31,12 +34,19 @@ cdef bytes RESP_407 = (
 cdef bytes RESP_502 = b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
 cdef int SOCK_BUF_SIZE = 131072
 cdef int SOCKET_BUF_BYTES = 1 << 20
-
 visits = Counter()
 cdef unsigned long bw = 0
 cdef unsigned long total_requests = 0
 cdef unsigned long successful_requests = 0
 cdef unsigned long failed_requests = 0
+
+_zc = None
+_ENABLE_SPLICE = os.environ.get("USE_SPLICE", "0") == "1"
+try:
+    if _ENABLE_SPLICE:
+        _zc = ctypes.CDLL(str(Path(__file__).with_name("zero_copy_helper.so")))
+except Exception:
+    _zc = None
 
 # Helper functions
 cdef str format_bw(unsigned long xfered):
@@ -262,6 +272,12 @@ async def handle_client(object client_sock):
             mv = memoryview(buf)
             try:
                 while True:
+                    # Attempt zero-copy splice if helper is loaded
+                    if _zc is not None and _ENABLE_SPLICE:
+                        sent = _zc.splice_copy(src_sock.fileno(), dest_sock.fileno())
+                        if sent > 0:
+                            bw += sent
+                            continue
                     n = await loop.sock_recv_into(src_sock, mv)
                     if n <= 0:
                         break
@@ -325,3 +341,10 @@ try:
     asyncio.run(main())
 except KeyboardInterrupt:
     print_met()
+import ctypes
+
+_zc = None
+try:
+    _zc = ctypes.CDLL(str(Path(__file__).with_name("zero_copy_helper.so")))
+except Exception:
+    _zc = None
