@@ -37,6 +37,7 @@ _batch = None
 _ENABLE_BATCH = os.environ.get("USE_BATCH", "0") == "1"
 _ENABLE_ZC = os.environ.get("USE_ZEROCOPY", "0") == "1"
 _ENABLE_SPLICE = os.environ.get("USE_SPLICE", "0") == "1"
+_BUSY_POLL_US = int(os.environ.get("BUSY_POLL_US", "0"))
 visits = Counter()
 cdef unsigned long bw = 0
 cdef unsigned long total_requests = 0
@@ -103,6 +104,12 @@ cdef inline void tune_socket(object sock):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUF_BYTES)
     except Exception:
         pass
+    if _BUSY_POLL_US > 0:
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BUSY_POLL, _BUSY_POLL_US)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_PREFER_BUSY_POLL, 1)
+        except Exception:
+            pass
     try:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_QUICKACK, 1)
     except Exception:

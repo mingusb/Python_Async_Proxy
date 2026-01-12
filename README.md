@@ -48,19 +48,19 @@ sudo tail -n 5 /var/log/nginx/access.log   # should show 200 responses for /inde
 The output includes `wrk` and `siege`. On this machine with the steps above (uvloop + `-O3 -march=native` build) at 100 concurrency and ~8s per payload, the proxy returns HTTP 200s and the backend access log increments accordingly.
 
 <!-- HTTP_RESULTS_START -->
-- small (HTML) (/index.html): wrk 20,066.98 req/s (p50 4.87ms, p99 8.42ms); siege 2,660.49 trans/s, throughput 0.17 MB/sec
-- 1KB binary (/payload_1k.bin): wrk 19,540.95 req/s (p50 4.98ms, p99 9.25ms); siege 2,703.91 trans/s, throughput 2.64 MB/sec
-- 16KB binary (/payload_16k.bin): wrk 19,189.11 req/s (p50 8.0ms, p99 24.96ms); siege 2,347.06 trans/s, throughput 36.67 MB/sec
-- 128KB binary (/payload_128k.bin): wrk 4,756.92 req/s (p50 20.46ms, p99 30.54ms); siege 1,606.38 trans/s, throughput 200.80 MB/sec
-- 1024KB binary (/payload_1024k.bin): wrk 1,278.31 req/s (p50 120.02ms, p99 438.02ms); siege 569.55 trans/s, throughput 569.55 MB/sec
+- small (HTML) (/index.html): wrk 20,707.69 req/s (p50 4.7ms, p99 8.23ms); siege 2,643.24 trans/s, throughput 0.17 MB/sec
+- 1KB binary (/payload_1k.bin): wrk 30,200.71 req/s (p50 5.01ms, p99 14.88ms); siege 2,621.47 trans/s, throughput 2.56 MB/sec
+- 16KB binary (/payload_16k.bin): wrk 12,524.85 req/s (p50 7.82ms, p99 14.75ms); siege 2,316.18 trans/s, throughput 36.19 MB/sec
+- 128KB binary (/payload_128k.bin): wrk 7,191.12 req/s (p50 20.98ms, p99 110.06ms); siege 1,594.22 trans/s, throughput 199.29 MB/sec
+- 1024KB binary (/payload_1024k.bin): wrk 771.30 req/s (p50 126.36ms, p99 408.98ms); siege 563.61 trans/s, throughput 563.61 MB/sec
 <!-- HTTP_RESULTS_END -->
 
 **HTTPS CONNECT (via proxy to local nginx SSL on :8443)**
 
 <!-- CONNECT_RESULTS_START -->
-- CONNECT HTML (/index.html): 565.77 req/s, transfer 0.04 MB/s
-- CONNECT 1KB binary (/payload_1k.bin): 453.51 req/s, transfer 0.44 MB/s
-- CONNECT 16KB binary (/payload_16k.bin): 441.01 req/s, transfer 6.89 MB/s
-- CONNECT 128KB binary (/payload_128k.bin): 381.68 req/s, transfer 47.71 MB/s
-- CONNECT 1024KB binary (/payload_1024k.bin): 254.78 req/s, transfer 254.78 MB/s
+- CONNECT HTML (/index.html): 599.70 req/s, transfer 0.04 MB/s
+- CONNECT 1KB binary (/payload_1k.bin): 0.00 req/s, transfer 0.00 MB/s
+- CONNECT 16KB binary (/payload_16k.bin): 438.12 req/s, transfer 6.85 MB/s
+- CONNECT 128KB binary (/payload_128k.bin): 386.10 req/s, transfer 48.26 MB/s
+- CONNECT 1024KB binary (/payload_1024k.bin): 244.80 req/s, transfer 244.80 MB/s
 <!-- CONNECT_RESULTS_END -->
