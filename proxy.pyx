@@ -25,6 +25,11 @@ cdef bytes AUTH_HEADER = (
     + base64.b64encode(f"{USER}:{PASS}".encode())
 )
 cdef bint TRACK_DOMAINS = False  # flip on if you want domain stats (slower)
+cdef bytes RESP_407 = (
+    b"HTTP/1.1 407 Proxy Auth Required\r\n"
+    b"Proxy-Authenticate: Basic\r\n\r\n"
+)
+cdef bytes RESP_502 = b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
 
 visits = Counter()
 cdef unsigned long bw = 0
@@ -96,10 +101,7 @@ async def proxy(client_r, client_w):
 
         # Validate Proxy-Authorization header (byte match avoids repeated decoding)
         if AUTH_HEADER not in data:
-            client_w.write(
-                b"HTTP/1.1 407 Proxy Auth Required\r\n"
-                b"Proxy-Authenticate: Basic\r\n\r\n"
-            )
+            client_w.write(RESP_407)
             return await client_w.drain()
 
         # Parse the target URL
@@ -110,21 +112,45 @@ async def proxy(client_r, client_w):
         if met == b'CONNECT':  # Handle HTTPS CONNECT requests
             try:
                 host, port = targ.split(b':')
-                dom = canon(host.decode())
-                remote_r, remote_w = await asyncio.open_connection(host.decode(), int(port))
+                host_str = host.decode()
+                dom = canon(host_str)
+                remote_r, remote_w = await asyncio.open_connection(host_str, int(port))
                 client_w.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 await client_w.drain()
             except Exception as error:
                 print(f"Error connecting to {host.decode()}:{int(port)}: {error}")
-                client_w.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                client_w.write(RESP_502)
                 failed_requests += 1
                 return await client_w.drain()
         else:  # Handle HTTP GET/POST requests
             targ_text = targ.decode()
-            parsed_url = urlparse(targ_text)
-            host = parsed_url.hostname or DEFAULT_BACKEND_HOST
-            port = parsed_url.port or DEFAULT_BACKEND_PORT
-            path = parsed_url.path or "/"
+
+            host = DEFAULT_BACKEND_HOST
+            port = DEFAULT_BACKEND_PORT
+            path = "/"
+
+            if targ.startswith(b"http"):
+                # Fast path parse: http[s]://host[:port]/path
+                try:
+                    without_scheme = targ_text.split("://", 1)[1]
+                    hostport, _, rest = without_scheme.partition("/")
+                    if ":" in hostport:
+                        host, port_s = hostport.split(":", 1)
+                        port = int(port_s)
+                    else:
+                        host = hostport
+                    path = "/" + rest
+                except Exception:
+                    parsed_url = urlparse(targ_text)
+                    host = parsed_url.hostname or DEFAULT_BACKEND_HOST
+                    port = parsed_url.port or DEFAULT_BACKEND_PORT
+                    path = parsed_url.path or "/"
+            else:
+                parsed_url = urlparse(targ_text)
+                host = parsed_url.hostname or DEFAULT_BACKEND_HOST
+                port = parsed_url.port or DEFAULT_BACKEND_PORT
+                path = parsed_url.path or "/"
+
             dom = canon(host)
 
             # Reconstruct the full request if the URL is relative
