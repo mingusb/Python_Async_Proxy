@@ -12,13 +12,13 @@ For benchmarking purposes a tuned local Apache webserver was used as the backend
 
 - The Python distribution used was Miniforge. https://github.com/conda-forge/miniforge
 
-- After installing Miniforge, run `mamba install cython`.
+- After installing Miniforge, run `mamba install cython uvloop` (or `pip install cython uvloop`).
 
 - If building Python from source run `pip3 install cython setuptools`.
 
 - If building Python from source there are compiler flags available such as `--enable-optimizations --enable-experimental-jit` which improve performance.
 
-- To build `proxy.pyx` run `python setup.py build_ext --inplace`.
+- To build `proxy.pyx` run `CFLAGS='-O3 -march=native' python setup.py build_ext --inplace --force`.
 
 - On Ubuntu, run `sudo apt update` followed by `sudo apt -y install curl wrk siege`.
 
@@ -26,13 +26,26 @@ For benchmarking purposes a tuned local Apache webserver was used as the backend
 
 To run the benchmark:
 
-- Make sure Apache is serving `index.html`.
-- Start the proxy with `python -c "import proxy"`.
-- Run `bash bench.sh`.
+- Make sure Nginx (or Apache) is serving `index.html` at `/var/www/html/`. The simplest way on Ubuntu is:
+  - `sudo cp index.html /var/www/html/index.html`
+  - `sudo systemctl start nginx`
+- Start the proxy with `python -c "import proxy"`. If `uvloop` is installed it will be used automatically.
+- Run `bash bench.sh` (wrk 30s and siege 30s).
+
+### Verifying that traffic is flowing
+
+If you want to confirm the proxy is actually transferring data, compare the backend access log before and after a short wrk run:
+
+```
+sudo wc -l /var/log/nginx/access.log
+wrk -t1 -c50 -d2 --latency -H "Proxy-Authorization: Basic $(echo -n 'username:password' | base64)" http://127.0.0.1:8888/index.html
+sudo wc -l /var/log/nginx/access.log
+sudo tail -n 5 /var/log/nginx/access.log   # should show 200 responses for /index.html
+```
 
 ## Results
 
-The output will include the results of `wrk` and `siege`.
+The output will include the results of `wrk` and `siege`. On this machine with the steps above (uvloop + `-O3 -march=native` build), the proxy returns HTTP 200s for `/index.html` and the backend access log increments by the request counts below.
 
 **wrk**
 
@@ -40,32 +53,31 @@ The output will include the results of `wrk` and `siege`.
 Running 30s test @ http://127.0.0.1:8888/index.html
   1 threads and 100 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency    20.62ms    1.38ms  38.09ms   80.11%
-    Req/Sec     4.78k   295.64     5.51k    81.67%
+    Latency     8.19ms    3.76ms 115.07ms   89.94%
+    Req/Sec    12.37k     1.75k   15.48k    75.25%
   Latency Distribution
-     50%   20.47ms
-     75%   21.10ms
-     90%   22.00ms
-     99%   25.41ms
-  142800 requests in 30.02s, 66.05MB read
-  Non-2xx or 3xx responses: 142800
-Requests/sec:   4756.53
-Transfer/sec:      2.20MB
+     50%    7.38ms
+     75%    9.20ms
+     90%   11.53ms
+     99%   20.14ms
+  368860 requests in 30.02s, 111.16MB read
+Requests/sec:  12288.04
+Transfer/sec:      3.70MB
 ```
 
 **siege**
 
 ```
-	"transactions":			      131096,
+	"transactions":			      60160,
 	"availability":			      100.00,
-	"elapsed_time":			       29.69,
-	"data_transferred":		       37.88,
-	"response_time":		        0.02,
-	"transaction_rate":		     4415.49,
-	"throughput":			        1.28,
-	"concurrency":			       99.82,
-	"successful_transactions":	           0,
+	"elapsed_time":			       33.20,
+	"data_transferred":		        3.79,
+	"response_time":		        0.06,
+	"transaction_rate":		     1812.05,
+	"throughput":			        0.11,
+	"concurrency":			       99.69,
+	"successful_transactions":	       60160,
 	"failed_transactions":		           0,
-	"longest_transaction":		        0.04,
+	"longest_transaction":		        0.15,
 	"shortest_transaction":		        0.00
 ```

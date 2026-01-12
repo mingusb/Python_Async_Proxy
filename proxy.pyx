@@ -8,6 +8,11 @@ import sys
 from collections import Counter
 from libc.stdlib cimport atoi
 
+try:
+    import uvloop
+except ImportError:
+    uvloop = None
+
 cdef str USER = "username"
 cdef str PASS = "password"
 cdef str HOST = "127.0.0.1"
@@ -15,6 +20,10 @@ cdef int PORT = 8888
 cdef int TIMEOUT = 10  # Request timeout
 cdef str DEFAULT_BACKEND_HOST = "127.0.0.1"  # Backend for relative links
 cdef int DEFAULT_BACKEND_PORT = 80           # Port for relative links
+cdef bytes AUTH_HEADER = (
+    b"Proxy-Authorization: Basic "
+    + base64.b64encode(f"{USER}:{PASS}".encode())
+)
 
 visits = Counter()
 cdef unsigned long bw = 0
@@ -79,9 +88,8 @@ async def proxy(client_r, client_w):
             await client_w.drain()
             return client_w.close()
 
-        # Validate Proxy-Authorization header
-        auth_head = base64.b64encode(f"{USER}:{PASS}".encode())
-        if f'Proxy-Authorization: Basic {auth_head.decode()}' not in data.decode():
+        # Validate Proxy-Authorization header (byte match avoids repeated decoding)
+        if AUTH_HEADER not in data:
             client_w.write(
                 b"HTTP/1.1 407 Proxy Auth Required\r\n"
                 b"Proxy-Authenticate: Basic\r\n\r\n"
@@ -106,15 +114,24 @@ async def proxy(client_r, client_w):
                 visits.update(["failed"])  # Increment failed visits
                 return await client_w.drain()
         else:  # Handle HTTP GET/POST requests
-            parsed_url = urlparse(targ.decode())
+            targ_text = targ.decode()
+            parsed_url = urlparse(targ_text)
             host = parsed_url.hostname or DEFAULT_BACKEND_HOST
             port = parsed_url.port or DEFAULT_BACKEND_PORT
             path = parsed_url.path or "/"
             dom = canon(host)
 
             # Reconstruct the full request if the URL is relative
-            if targ.decode().startswith("/"):
-                data = f"GET {path} HTTP/1.1\r\nHost: {host}\r\n".encode() + b"\r\n".join(data.split(b'\r\n')[1:])
+            if targ_text.startswith("/"):
+                req_lines = data.split(b"\r\n")
+                filtered_headers = [
+                    line for line in req_lines[1:] if line and not line.lower().startswith(b"host:")
+                ]
+                data = (
+                    f"GET {path} HTTP/1.1\r\nHost: {host}\r\n".encode()
+                    + b"\r\n".join(filtered_headers)
+                    + b"\r\n\r\n"
+                )
 
             try:
                 remote_r, remote_w = await asyncio.open_connection(host, port)
@@ -174,6 +191,8 @@ async def main():
         await server.serve_forever()
 
 try:
+    if uvloop is not None:
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     asyncio.run(main())
 except KeyboardInterrupt:
     print_met()
