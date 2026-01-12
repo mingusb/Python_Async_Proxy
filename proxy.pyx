@@ -87,6 +87,10 @@ cdef inline void tune_socket(object sock):
     except Exception:
         pass
     try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except Exception:
+        pass
+    try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUF_BYTES)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUF_BYTES)
     except Exception:
@@ -337,6 +341,10 @@ async def main():
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except Exception:
+        pass
+    try:
+        server_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_FASTOPEN, 1024)
     except Exception:
         pass
     tune_socket(server_sock)
