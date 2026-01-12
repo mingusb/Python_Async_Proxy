@@ -6,9 +6,8 @@ import socket
 import sys
 import time
 import os
-import ctypes
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 
 try:
     import uvloop
@@ -41,12 +40,21 @@ cdef unsigned long successful_requests = 0
 cdef unsigned long failed_requests = 0
 
 _zc = None
+_splicer = None
+_ENABLE_ZC = os.environ.get("USE_ZEROCOPY", "0") == "1"
 _ENABLE_SPLICE = os.environ.get("USE_SPLICE", "0") == "1"
 try:
-    if _ENABLE_SPLICE:
+    if _ENABLE_ZC:
         _zc = ctypes.CDLL(str(Path(__file__).with_name("zero_copy_helper.so")))
 except Exception:
     _zc = None
+
+try:
+    if _ENABLE_SPLICE:
+        _splicer = ctypes.CDLL(str(Path(__file__).with_name("splice_helper.so")))
+        _splicer.init_splice_pipe()
+except Exception:
+    _splicer = None
 
 # Helper functions
 cdef str format_bw(unsigned long xfered):
@@ -272,8 +280,16 @@ async def handle_client(object client_sock):
             mv = memoryview(buf)
             try:
                 while True:
-                    # Attempt zero-copy splice if helper is loaded
-                    if _zc is not None and _ENABLE_SPLICE:
+                    if _splicer is not None and _ENABLE_SPLICE:
+                        sent = _splicer.splice_once(
+                            src_sock.fileno(), dest_sock.fileno(), SOCK_BUF_SIZE
+                        )
+                        if sent > 0:
+                            bw += sent
+                            continue
+                        elif sent == -1:
+                            break
+                    if _zc is not None and _ENABLE_ZC:
                         sent = _zc.splice_copy(src_sock.fileno(), dest_sock.fileno())
                         if sent > 0:
                             bw += sent

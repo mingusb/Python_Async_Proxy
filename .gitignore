@@ -11,3 +11,5 @@ bench_connect.log
 tmp/
 *.egg-info/
 bench
+splice_helper.c
+splice_helper.so
