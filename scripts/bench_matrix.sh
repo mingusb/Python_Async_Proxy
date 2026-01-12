@@ -2,13 +2,14 @@
 set -euo pipefail
 
 # Run benchmark matrix across available modes and pick the fastest small HTML wrk rps.
-# Modes: baseline (default), splice, zerocopy.
+# Modes: baseline (default), splice, zerocopy, batch, busy-poll, multi-worker.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-NAMES=(baseline splice zerocopy batch)
-ENVS=("" "USE_SPLICE=1" "USE_ZEROCOPY=1" "USE_BATCH=1")
+WORKER_COUNT="${WORKERS_BENCH:-4}"
+NAMES=(baseline splice zerocopy batch bp50 workers)
+ENVS=("" "USE_SPLICE=1" "USE_ZEROCOPY=1" "USE_BATCH=1" "BUSY_POLL_US=50" "WORKERS=${WORKER_COUNT}")
 
 BEST_MODE=""
 BEST_RPS=0.0

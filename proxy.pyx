@@ -6,6 +6,7 @@ import socket
 import sys
 import time
 import os
+import ctypes
 from collections import Counter
 from pathlib import Path
 
@@ -33,6 +34,7 @@ cdef bytes RESP_407 = (
 cdef bytes RESP_502 = b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
 cdef int SOCK_BUF_SIZE = 131072
 cdef int SOCKET_BUF_BYTES = 1 << 20
+WORKERS = int(os.environ.get("WORKERS", "1"))
 _batch = None
 _ENABLE_BATCH = os.environ.get("USE_BATCH", "0") == "1"
 _ENABLE_ZC = os.environ.get("USE_ZEROCOPY", "0") == "1"
@@ -398,16 +400,73 @@ async def main():
     finally:
         server_sock.close()
 
-try:
-    if uvloop is not None:
-        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-    asyncio.run(main())
-except KeyboardInterrupt:
-    print_met()
-import ctypes
+def _shutdown_children(list worker_pids):
+    """Best-effort cleanup for forked workers."""
+    for pid in worker_pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+    for pid in worker_pids:
+        try:
+            os.waitpid(pid, 0)
+        except Exception:
+            pass
 
-_zc = None
-try:
-    _zc = ctypes.CDLL(str(Path(__file__).with_name("zero_copy_helper.so")))
-except Exception:
-    _zc = None
+
+def _run_workers():
+    """Spawn WORKERS processes (if >1) to leverage SO_REUSEPORT."""
+    workers = WORKERS if WORKERS > 0 else 1
+    if workers > 1 and not hasattr(os, "fork"):
+        workers = 1
+    if workers == 1:
+        try:
+            if uvloop is not None:
+                asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            print_met()
+        return
+
+    worker_pids = []
+
+    def _handle_stop(sig=0, frame=None):
+        _shutdown_children(worker_pids)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_stop)
+    signal.signal(signal.SIGINT, _handle_stop)
+
+    for _ in range(workers):
+        pid = os.fork()
+        if pid == 0:
+            try:
+                if uvloop is not None:
+                    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+                asyncio.run(main())
+            except KeyboardInterrupt:
+                print_met()
+            sys.exit(0)
+        worker_pids.append(pid)
+
+    def _reap(_sig, _frame):
+        while True:
+            try:
+                reaped, _ = os.waitpid(-1, os.WNOHANG)
+                if reaped <= 0:
+                    break
+                if reaped in worker_pids:
+                    worker_pids.remove(reaped)
+            except ChildProcessError:
+                break
+
+    signal.signal(signal.SIGCHLD, _reap)
+
+    try:
+        while worker_pids:
+            signal.pause()
+    finally:
+        _shutdown_children(worker_pids)
+
+
+_run_workers()
