@@ -31,6 +31,8 @@ cdef bytes RESP_407 = (
 cdef bytes RESP_502 = b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
 cdef int SOCK_BUF_SIZE = 131072
 cdef int SOCKET_BUF_BYTES = 1 << 20
+cdef int MSG_ZEROCOPY = getattr(socket, "MSG_ZEROCOPY", 0)
+cdef int SO_ZEROCOPY = getattr(socket, "SO_ZEROCOPY", 60)  # Linux default
 
 visits = Counter()
 cdef unsigned long bw = 0
@@ -75,6 +77,11 @@ cdef inline void tune_socket(object sock):
         pass
     try:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_QUICKACK, 1)
+    except Exception:
+        pass
+    try:
+        if MSG_ZEROCOPY:
+            sock.setsockopt(socket.SOL_SOCKET, SO_ZEROCOPY, 1)
     except Exception:
         pass
 
@@ -266,6 +273,15 @@ async def handle_client(object client_sock):
                     if n <= 0:
                         break
                     bw += n
+                    if MSG_ZEROCOPY:
+                        try:
+                            sent = dest_sock.sendmsg([mv[:n]], MSG_ZEROCOPY)
+                            if sent < n:
+                                await loop.sock_sendall(dest_sock, mv[sent:n])
+                            continue
+                        except (BlockingIOError, OSError):
+                            # fallback to regular path on EAGAIN/unsupported
+                            pass
                     await loop.sock_sendall(dest_sock, mv[:n])
             except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError, OSError):
                 pass
