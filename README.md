@@ -30,7 +30,7 @@ To run the benchmark:
   - `sudo cp index.html /var/www/html/index.html`
   - `sudo systemctl start nginx`
 - Start the proxy with `python -c "import proxy"`. If `uvloop` is installed it will be used automatically.
-- Run `bash bench.sh` (wrk 30s and siege 30s).
+- Run `bash bench.sh` (wrk 30s and siege 30s with `-b` benchmark mode).
 
 ### Verifying that traffic is flowing
 
@@ -53,32 +53,32 @@ The output will include the results of `wrk` and `siege`. On this machine with t
 Running 30s test @ http://127.0.0.1:8888/index.html
   1 threads and 100 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     7.67ms    5.53ms 167.16ms   93.31%
-    Req/Sec    13.68k     2.91k   18.04k    74.33%
+    Latency     6.40ms    3.13ms  90.32ms   87.61%
+    Req/Sec    15.74k     2.28k   22.06k    78.00%
   Latency Distribution
-     50%    6.46ms
-     75%    8.47ms
-     90%   11.58ms
-     99%   26.31ms
-  409856 requests in 27.30s, 123.51MB read
-  Socket errors: timeout 100
-Requests/sec:  15013.18
-Transfer/sec:      4.52MB
+     50%    5.74ms
+     75%    7.25ms
+     90%    9.42ms
+     99%   16.68ms
+  471396 requests in 27.31s, 142.06MB read
+  Socket errors: timeout 89
+Requests/sec:  17258.59
+Transfer/sec:      5.20MB
 ```
 
 **siege**
 
 ```
-	"transactions":			      62507,
+	"transactions":			      63338,
 	"availability":			      100.00,
-	"elapsed_time":			       33.04,
-	"data_transferred":		        3.93,
+	"elapsed_time":			       32.98,
+	"data_transferred":		        3.99,
 	"response_time":		        0.05,
-	"transaction_rate":		     1891.86,
+	"transaction_rate":		     1920.50,
 	"throughput":			        0.12,
-	"concurrency":			       99.67,
-	"successful_transactions":	       62508,
+	"concurrency":			       99.69,
+	"successful_transactions":	       63338,
 	"failed_transactions":		           0,
 	"longest_transaction":		        0.13,
-	"shortest_transaction":		        0.00
+	"shortest_transaction":		        0.01
 ```

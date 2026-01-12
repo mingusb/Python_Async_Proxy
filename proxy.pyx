@@ -24,9 +24,13 @@ cdef bytes AUTH_HEADER = (
     b"Proxy-Authorization: Basic "
     + base64.b64encode(f"{USER}:{PASS}".encode())
 )
+cdef bint TRACK_DOMAINS = False  # flip on if you want domain stats (slower)
 
 visits = Counter()
 cdef unsigned long bw = 0
+cdef unsigned long total_requests = 0
+cdef unsigned long successful_requests = 0
+cdef unsigned long failed_requests = 0
 
 # Helper functions
 cdef str format_bw(unsigned long xfered):
@@ -49,18 +53,19 @@ def print_met():
     """Print proxy metrics and exit."""
     print("Metrics:")
     print(f"Bandwidth usage: {format_bw(bw)}")
-    print(f"Total Requests: {visits['total']}")
-    print(f"Successful Visits: {visits['successful']}")
-    print(f"Failed Visits: {visits['failed']}")
-    for dom, count in visits.items():
-        if dom not in ("total", "successful", "failed"):
-            print(f"- {dom}: {count} visit(s)")
+    print(f"Total Requests: {total_requests}")
+    print(f"Successful Visits: {successful_requests}")
+    print(f"Failed Visits: {failed_requests}")
+    if TRACK_DOMAINS:
+        for dom, count in visits.items():
+            if dom not in ("total", "successful", "failed"):
+                print(f"- {dom}: {count} visit(s)")
     sys.exit(0)
 
 async def proxy(client_r, client_w):
     """Handle proxy connections."""
-    global bw
-    visits.update(["total"])  # Increment total requests immediately upon connection
+    global bw, total_requests, successful_requests, failed_requests
+    total_requests += 1  # count connections (keep-alive aggregates requests)
 
     try:
         # Read the initial client request
@@ -68,18 +73,19 @@ async def proxy(client_r, client_w):
 
         # Handle /metrics endpoint
         if b'GET /metrics' in data:
-            sorted_vis = sorted(visits.items(), key=lambda item: item[1], reverse=True)
             metrics_resp = {
                 "bandwidth_usage": format_bw(bw),
-                "total_requests": visits["total"],
-                "successful_visits": visits["successful"],
-                "failed_visits": visits["failed"],
-                "top_sites": [
+                "total_requests": total_requests,
+                "successful_visits": successful_requests,
+                "failed_visits": failed_requests,
+                "top_sites": [],
+            }
+            if TRACK_DOMAINS:
+                metrics_resp["top_sites"] = [
                     {"url": dom, "visits": count}
                     for dom, count in visits.items()
                     if dom not in ("total", "successful", "failed")
-                ],
-            }
+                ]
             client_w.write(
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: application/json\r\n\r\n"
@@ -111,7 +117,7 @@ async def proxy(client_r, client_w):
             except Exception as error:
                 print(f"Error connecting to {host.decode()}:{int(port)}: {error}")
                 client_w.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-                visits.update(["failed"])  # Increment failed visits
+                failed_requests += 1
                 return await client_w.drain()
         else:  # Handle HTTP GET/POST requests
             targ_text = targ.decode()
@@ -140,15 +146,17 @@ async def proxy(client_r, client_w):
             except Exception as error:
                 print(f"Error connecting to {host}:{port}: {error}")
                 client_w.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-                visits.update(["failed"])  # Increment failed visits
+                failed_requests += 1
                 return await client_w.drain()
 
         # Update domain visits (count every request)
-        visits.update([dom])
+        if TRACK_DOMAINS:
+            visits.update([dom])
 
         # Relay data between client and remote server
         async def relay(src_read, dest_write):
             global bw
+            flushed = 0
             try:
                 while True:
                     chunk = await src_read.read(65536)
@@ -156,7 +164,10 @@ async def proxy(client_r, client_w):
                         break
                     bw += len(chunk)
                     dest_write.write(chunk)
-                    await dest_write.drain()
+                    flushed += 1
+                    if flushed & 7 == 0:  # amortize drain calls
+                        await dest_write.drain()
+                await dest_write.drain()
             except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
                 pass
             finally:
@@ -168,14 +179,14 @@ async def proxy(client_r, client_w):
         await asyncio.gather(to_client, to_remote)
 
         # Increment successful visits only if relay completes without errors
-        visits.update(["successful"])
+        successful_requests += 1
 
     except asyncio.TimeoutError:
         print("Timeout.")
-        visits.update(["failed"])
+        failed_requests += 1
     except Exception as error:
         print(f"Error: {error}")
-        visits.update(["failed"])
+        failed_requests += 1
     finally:
         client_w.close()
 
