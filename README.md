@@ -36,6 +36,7 @@ To run the benchmark:
 - `USE_C_RELAY` can also set `CRELAY_THREADS=<n>` to grow the thread pool used to run C relays in parallel.
 - If you want each worker pinned to a CPU (for lower cache thrash), set `PIN_WORKERS=1` alongside `WORKERS>1`.
 - For a high-concurrency sweep (including C10K), run `make bench-c10k`. Tweak `CONC_LIST="1000 5000 10000 15000"` and `PROXY_ENV="WORKERS=4 PIN_WORKERS=1"` as needed; the script always reports the 10K-concurrency result and the peak observed.
+- For tougher C10K loads, you can also set `WRK_THREADS=<n>` and `SYSCTL_TUNE=1` (enables higher backlog sysctls) when running `make bench-c10k`.
 
 ### Verifying that traffic is flowing
 
