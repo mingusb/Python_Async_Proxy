@@ -29,7 +29,8 @@ cdef bytes RESP_407 = (
     b"Proxy-Authenticate: Basic\r\n\r\n"
 )
 cdef bytes RESP_502 = b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
-cdef int SOCK_BUF_SIZE = 65536
+cdef int SOCK_BUF_SIZE = 131072
+cdef int SOCKET_BUF_BYTES = 1 << 20
 
 visits = Counter()
 cdef unsigned long bw = 0
@@ -54,6 +55,28 @@ cdef str canon(str host):
     if n > 2:
         return '.'.join(parts[n - 2 : n])
     return host
+
+cdef inline void tune_socket(object sock):
+    """Set aggressive socket options to trim latency."""
+    if sock is None:
+        return
+    try:
+        sock.setblocking(False)
+    except Exception:
+        pass
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception:
+        pass
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUF_BYTES)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUF_BYTES)
+    except Exception:
+        pass
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_QUICKACK, 1)
+    except Exception:
+        pass
 
 def print_met():
     """Print proxy metrics and exit."""
@@ -128,12 +151,24 @@ cdef inline tuple fast_parse_host(bytes targ, bytes raw_request):
 
 
 async def proxy(client_r, client_w):
+    """Legacy entrypoint (kept for compatibility with asyncio.start_server)."""
+    client_sock = client_w.get_extra_info("socket")
+    return await handle_client(client_sock)
+
+
+async def handle_client(object client_sock):
     """Handle proxy connections with minimal Python overhead."""
     global bw, total_requests, successful_requests, failed_requests
     total_requests += 1  # count connections (keep-alive aggregates requests)
     try:
-        # Read the initial client request
-        data = await asyncio.wait_for(client_r.read(1024), timeout=TIMEOUT)
+        loop = asyncio.get_running_loop()
+        remote_sock = None
+        tune_socket(client_sock)
+
+        # Read the initial client request via raw socket
+        data = await asyncio.wait_for(loop.sock_recv(client_sock, 2048), timeout=TIMEOUT)
+        if not data:
+            return
 
         # Handle /metrics endpoint
         if b'GET /metrics' in data:
@@ -150,22 +185,22 @@ async def proxy(client_r, client_w):
                     for dom, count in visits.items()
                     if dom not in ("total", "successful", "failed")
                 ]
-            client_w.write(
+            await loop.sock_sendall(
+                client_sock,
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: application/json\r\n\r\n"
-                + json.dumps(metrics_resp).encode()
+                + json.dumps(metrics_resp).encode(),
             )
-            await client_w.drain()
-            return client_w.close()
+            return
 
         # Validate Proxy-Authorization header (byte match avoids repeated decoding)
         if AUTH_HEADER not in data:
-            client_w.write(RESP_407)
-            return await client_w.drain()
+            await loop.sock_sendall(client_sock, RESP_407)
+            return
 
         # Parse the target URL
         met, targ, _ = data.split(b' ')[:3]
-        remote_r, remote_w = None, None
+        remote_sock = None
         dom = ""
 
         if met == b'CONNECT':  # Handle HTTPS CONNECT requests
@@ -173,17 +208,23 @@ async def proxy(client_r, client_w):
                 host, port_b = targ.split(b':')
                 host_str = host.decode()
                 dom = canon(host_str)
-                remote_r, remote_w = await asyncio.open_connection(host_str, int(port_b))
-                client_w.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-                await client_w.drain()
+                remote_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                tune_socket(remote_sock)
+                await loop.sock_connect(remote_sock, (host_str, int(port_b)))
+                await loop.sock_sendall(
+                    client_sock, b"HTTP/1.1 200 Connection Established\r\n\r\n"
+                )
             except Exception as error:
                 print(f"Error connecting to {host.decode()}:{int(port_b)}: {error}")
-                client_w.write(RESP_502)
+                await loop.sock_sendall(client_sock, RESP_502)
                 failed_requests += 1
-                return await client_w.drain()
+                return
         else:  # Handle HTTP GET/POST requests
             host, port, path = fast_parse_host(targ, data)
             dom = canon(host)
+            if host == HOST and port == PORT:
+                host = DEFAULT_BACKEND_HOST
+                port = DEFAULT_BACKEND_PORT
 
             # Reconstruct the full request if the URL is relative
             if targ.startswith(b"/"):
@@ -198,44 +239,44 @@ async def proxy(client_r, client_w):
                 )
 
             try:
-                remote_r, remote_w = await asyncio.open_connection(host, port)
-                remote_w.write(data)
-                await remote_w.drain()
+                remote_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                tune_socket(remote_sock)
+                await loop.sock_connect(remote_sock, (host, port))
+                await loop.sock_sendall(remote_sock, data)
             except Exception as error:
                 print(f"Error connecting to {host}:{port}: {error}")
-                client_w.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                await loop.sock_sendall(client_sock, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
                 failed_requests += 1
-                return await client_w.drain()
+                return
 
         # Update domain visits (count every request)
         if TRACK_DOMAINS:
             visits.update([dom])
 
         # Relay data between client and remote server
-        async def relay(src_read, dest_write):
+        async def relay_sock(src_sock, dest_sock):
             global bw
+            if src_sock is None or dest_sock is None:
+                return
+            buf = bytearray(SOCK_BUF_SIZE)
+            mv = memoryview(buf)
             try:
                 while True:
-                    chunk = await src_read.read(SOCK_BUF_SIZE)
-                    if not chunk:
+                    n = await loop.sock_recv_into(src_sock, mv)
+                    if n <= 0:
                         break
-                    bw += len(chunk)
-                    dest_write.write(chunk)
-                    await dest_write.drain()
-            except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
+                    bw += n
+                    await loop.sock_sendall(dest_sock, mv[:n])
+            except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError, OSError):
                 pass
-            finally:
-                try:
-                    dest_write.close()
-                except Exception:
-                    pass
 
-        to_client = asyncio.create_task(relay(remote_r, client_w))
-        to_remote = asyncio.create_task(relay(client_r, remote_w))
-        await asyncio.gather(to_client, to_remote)
+        if remote_sock is not None:
+            to_client = asyncio.create_task(relay_sock(remote_sock, client_sock))
+            to_remote = asyncio.create_task(relay_sock(client_sock, remote_sock))
+            await asyncio.gather(to_client, to_remote)
 
-        # Increment successful visits only if relay completes without errors
-        successful_requests += 1
+            # Increment successful visits only if relay completes without errors
+            successful_requests += 1
 
     except asyncio.TimeoutError:
         print("Timeout.")
@@ -244,20 +285,39 @@ async def proxy(client_r, client_w):
         print(f"Error: {error}")
         failed_requests += 1
     finally:
-        client_w.close()
+        try:
+            client_sock.close()
+        except Exception:
+            pass
+        try:
+            if remote_sock is not None:
+                remote_sock.close()
+        except Exception:
+            pass
 
 async def main():
-    """Run the proxy server."""
+    """Run the proxy server with a raw socket accept loop."""
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, print_met)
 
-    server = await asyncio.start_server(
-        proxy, HOST, PORT, reuse_port=True, backlog=65535
-    )
-    async with server:
-        print(f"Running on {HOST}:{PORT}")
-        await server.serve_forever()
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except Exception:
+        pass
+    tune_socket(server_sock)
+    server_sock.bind((HOST, PORT))
+    server_sock.listen(65535)
+    print(f"Running on {HOST}:{PORT}")
+
+    try:
+        while True:
+            client_sock, _ = await loop.sock_accept(server_sock)
+            asyncio.create_task(handle_client(client_sock))
+    finally:
+        server_sock.close()
 
 try:
     if uvloop is not None:

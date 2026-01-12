@@ -10,3 +10,4 @@ bench_connect.log
 *.pid
 tmp/
 *.egg-info/
+bench

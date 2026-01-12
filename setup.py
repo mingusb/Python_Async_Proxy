@@ -1,17 +1,23 @@
+import os
+
 from setuptools import Extension, setup
 from Cython.Build import cythonize
+
+extra_compile_args = [
+    "-O3",
+    "-Ofast",
+    "-march=native",
+    "-flto",
+    "-fno-semantic-interposition",
+    "-fvisibility=hidden",
+]
+if os.environ.get("AVX512", "0") == "1":
+    extra_compile_args.append("-mavx512f")
 
 ext = Extension(
     "proxy",
     ["proxy.pyx"],
-    extra_compile_args=[
-        "-O3",
-        "-Ofast",
-        "-march=native",
-        "-flto",
-        "-fno-semantic-interposition",
-        "-fvisibility=hidden",
-    ],
+    extra_compile_args=extra_compile_args,
     extra_link_args=["-flto"],
     define_macros=[
         ("CYTHON_CLINE_IN_TRACEBACK", 0),

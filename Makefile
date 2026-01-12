@@ -14,3 +14,5 @@ smoke:
 
 build:
 	@python setup.py build_ext --inplace
+
+.PHONY: bench http-bench connect-bench update-readme smoke build
