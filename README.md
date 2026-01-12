@@ -29,6 +29,7 @@ To run the benchmark:
 - Make sure Nginx (or Apache) is serving `index.html` at `/var/www/html/`. The simplest way on Ubuntu is:
   - `sudo cp index.html /var/www/html/index.html`
   - `sudo systemctl start nginx`
+- The benchmark script now generates a few payload files under `/var/www/html/` (1KB, 16KB, 128KB, 1MB) using `sudo dd`. Be ready to enter sudo for that step.
 - Start the proxy with `python -c "import proxy"`. If `uvloop` is installed it will be used automatically.
 - Run `bash bench.sh` (wrk 30s and siege 30s with `-b` benchmark mode).
 
