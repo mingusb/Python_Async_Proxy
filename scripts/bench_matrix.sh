@@ -7,8 +7,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-NAMES=(baseline splice zerocopy)
-ENVS=("" "USE_SPLICE=1" "USE_ZEROCOPY=1")
+NAMES=(baseline splice zerocopy batch)
+ENVS=("" "USE_SPLICE=1" "USE_ZEROCOPY=1" "USE_BATCH=1")
 
 BEST_MODE=""
 BEST_RPS=0.0
