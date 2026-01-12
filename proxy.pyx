@@ -35,6 +35,8 @@ cdef int SOCK_BUF_SIZE = 131072
 cdef int SOCKET_BUF_BYTES = 1 << 20
 _batch = None
 _ENABLE_BATCH = os.environ.get("USE_BATCH", "0") == "1"
+_ENABLE_ZC = os.environ.get("USE_ZEROCOPY", "0") == "1"
+_ENABLE_SPLICE = os.environ.get("USE_SPLICE", "0") == "1"
 visits = Counter()
 cdef unsigned long bw = 0
 cdef unsigned long total_requests = 0
@@ -43,8 +45,6 @@ cdef unsigned long failed_requests = 0
 
 _zc = None
 _splicer = None
-_ENABLE_ZC = os.environ.get("USE_ZEROCOPY", "0") == "1"
-_ENABLE_SPLICE = os.environ.get("USE_SPLICE", "0") == "1"
 try:
     if _ENABLE_ZC:
         _zc = ctypes.CDLL(str(Path(__file__).with_name("zero_copy_helper.so")))
@@ -289,9 +289,28 @@ async def handle_client(object client_sock):
             if src_sock is None or dest_sock is None:
                 return
             buf = bytearray(SOCK_BUF_SIZE)
+            cdef int sizes[16]
+            cdef int max_batch = 16
             mv = memoryview(buf)
             try:
                 while True:
+                    if _batch is not None and _ENABLE_BATCH:
+                        count = _batch.recvmmsg_batch(
+                            src_sock.fileno(), mv, SOCK_BUF_SIZE, max_batch, sizes
+                        )
+                        if count > 0:
+                            total_sent = 0
+                            for i in range(count):
+                                if sizes[i] > 0:
+                                    total_sent += sizes[i]
+                            if total_sent > 0:
+                                sent = _batch.sendmmsg_batch(
+                                    dest_sock.fileno(), mv, SOCK_BUF_SIZE, sizes, count
+                                )
+                                if sent > 0:
+                                    bw += total_sent
+                                    continue
+                        # negative values fall through to regular read
                     if _splicer is not None and _ENABLE_SPLICE:
                         sent = _splicer.splice_once(
                             src_sock.fileno(), dest_sock.fileno(), SOCK_BUF_SIZE
