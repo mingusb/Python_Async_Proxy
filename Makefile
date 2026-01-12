@@ -14,6 +14,7 @@ smoke:
 
 build:
 	@python setup.py build_ext --inplace
+	@gcc -O3 -Wall -shared -fPIC -o c_relay_helper.so c_relay_helper.c
 
 .PHONY: bench http-bench connect-bench update-readme smoke build
 

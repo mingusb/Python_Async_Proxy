@@ -7,6 +7,7 @@ import sys
 import time
 import os
 import ctypes
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 from pathlib import Path
 
@@ -39,6 +40,8 @@ _batch = None
 _ENABLE_BATCH = os.environ.get("USE_BATCH", "0") == "1"
 _ENABLE_ZC = os.environ.get("USE_ZEROCOPY", "0") == "1"
 _ENABLE_SPLICE = os.environ.get("USE_SPLICE", "0") == "1"
+_ENABLE_C_RELAY = os.environ.get("USE_C_RELAY", "0") == "1"
+_CRELAY_THREADS = int(os.environ.get("CRELAY_THREADS", "256"))
 _BUSY_POLL_US = int(os.environ.get("BUSY_POLL_US", "0"))
 visits = Counter()
 cdef unsigned long bw = 0
@@ -48,6 +51,8 @@ cdef unsigned long failed_requests = 0
 
 _zc = None
 _splicer = None
+_crelay = None
+_relay_executor = None
 try:
     if _ENABLE_ZC:
         _zc = ctypes.CDLL(str(Path(__file__).with_name("zero_copy_helper.so")))
@@ -66,6 +71,18 @@ try:
         _batch = ctypes.CDLL(str(Path(__file__).with_name("batch_helper.so")))
 except Exception:
     _batch = None
+
+try:
+    if _ENABLE_C_RELAY:
+        _crelay = ctypes.CDLL(str(Path(__file__).with_name("c_relay_helper.so")))
+        try:
+            _crelay.relay_pair.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
+            _crelay.relay_pair.restype = ctypes.c_int
+            _relay_executor = ThreadPoolExecutor(max_workers=_CRELAY_THREADS)
+        except Exception:
+            pass
+except Exception:
+    _crelay = None
 
 # Helper functions
 cdef str format_bw(unsigned long xfered):
@@ -348,12 +365,19 @@ async def handle_client(object client_sock):
                 pass
 
         if remote_sock is not None:
-            to_client = asyncio.create_task(relay_sock(remote_sock, client_sock))
-            to_remote = asyncio.create_task(relay_sock(client_sock, remote_sock))
-            await asyncio.gather(to_client, to_remote)
+            if _crelay is not None and _ENABLE_C_RELAY:
+                def _relay_pair():
+                    return _crelay.relay_pair(client_sock.fileno(), remote_sock.fileno(), SOCK_BUF_SIZE)
 
-            # Increment successful visits only if relay completes without errors
-            successful_requests += 1
+                await loop.run_in_executor(_relay_executor, _relay_pair)
+                successful_requests += 1
+            else:
+                to_client = asyncio.create_task(relay_sock(remote_sock, client_sock))
+                to_remote = asyncio.create_task(relay_sock(client_sock, remote_sock))
+                await asyncio.gather(to_client, to_remote)
+
+                # Increment successful visits only if relay completes without errors
+                successful_requests += 1
 
     except asyncio.TimeoutError:
         print("Timeout.")
@@ -375,6 +399,8 @@ async def handle_client(object client_sock):
 async def main():
     """Run the proxy server with a raw socket accept loop."""
     loop = asyncio.get_running_loop()
+    if _relay_executor is not None:
+        loop.set_default_executor(_relay_executor)
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, print_met)
 

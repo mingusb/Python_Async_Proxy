@@ -8,8 +8,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 WORKER_COUNT="${WORKERS_BENCH:-4}"
-NAMES=(baseline splice zerocopy batch bp50 workers)
-ENVS=("" "USE_SPLICE=1" "USE_ZEROCOPY=1" "USE_BATCH=1" "BUSY_POLL_US=50" "WORKERS=${WORKER_COUNT}")
+CRELAY_THREADS="${CRELAY_THREADS:-256}"
+NAMES=(baseline splice zerocopy batch bp50 workers crelay)
+ENVS=("" "USE_SPLICE=1" "USE_ZEROCOPY=1" "USE_BATCH=1" "BUSY_POLL_US=50" "WORKERS=${WORKER_COUNT}" "USE_C_RELAY=1 CRELAY_THREADS=${CRELAY_THREADS}")
 
 BEST_MODE=""
 BEST_RPS=0.0

@@ -1,6 +1,7 @@
 build/
 *.so
 *.c
+!c_relay_helper.c
 *.o
 __pycache__/
 *.pyc
