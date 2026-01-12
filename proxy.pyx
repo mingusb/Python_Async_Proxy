@@ -1,12 +1,11 @@
-from urllib.parse import urlparse
 import asyncio
 import base64
-import signal
 import json
-import time
+import signal
+import socket
 import sys
+import time
 from collections import Counter
-from libc.stdlib cimport atoi
 
 try:
     import uvloop
@@ -30,6 +29,7 @@ cdef bytes RESP_407 = (
     b"Proxy-Authenticate: Basic\r\n\r\n"
 )
 cdef bytes RESP_502 = b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
+cdef int SOCK_BUF_SIZE = 65536
 
 visits = Counter()
 cdef unsigned long bw = 0
@@ -50,8 +50,9 @@ cdef str format_bw(unsigned long xfered):
 cdef str canon(str host):
     """Simplify domain name to base domain (e.g., xyz.com)."""
     cdef list parts = host.split('.')
-    if len(parts) > 2:
-        return '.'.join(parts[-2:])
+    cdef Py_ssize_t n = len(parts)
+    if n > 2:
+        return '.'.join(parts[n - 2 : n])
     return host
 
 def print_met():
@@ -67,11 +68,69 @@ def print_met():
                 print(f"- {dom}: {count} visit(s)")
     sys.exit(0)
 
+cdef inline tuple fast_parse_host(bytes targ, bytes raw_request):
+    """Return (host, port, path) for HTTP requests without urlparse."""
+    cdef str host = DEFAULT_BACKEND_HOST
+    cdef int port = DEFAULT_BACKEND_PORT
+    cdef str path = "/"
+
+    cdef int scheme_idx = targ.find(b"://")
+    cdef int slash_idx
+
+    if scheme_idx != -1:
+        after_scheme = targ[scheme_idx + 3 :]
+        slash_idx = after_scheme.find(b"/")
+        if slash_idx == -1:
+            hostport = after_scheme
+            path = "/"
+        else:
+            hostport = after_scheme[:slash_idx]
+            try:
+                path = after_scheme[slash_idx:].decode("ascii", "ignore") or "/"
+            except Exception:
+                path = "/"
+
+        colon_idx = hostport.find(b":")
+        if colon_idx != -1:
+            try:
+                host = hostport[:colon_idx].decode("ascii", "ignore")
+                port = int(hostport[colon_idx + 1 :])
+            except Exception:
+                host = hostport[:colon_idx].decode("ascii", "ignore")
+        else:
+            host = hostport.decode("ascii", "ignore")
+        return host, port, path
+
+    # Relative URL: pull Host header
+    raw_lower = raw_request.lower()
+    host_idx = raw_lower.find(b"\r\nhost:")
+    if host_idx != -1:
+        host_line = raw_request[host_idx + 2 :]
+        end_idx = host_line.find(b"\r\n")
+        if end_idx != -1:
+            host_line = host_line[:end_idx]
+        try:
+            host_val = host_line.split(b":", 1)[1].strip()
+            colon_idx = host_val.find(b":")
+            if colon_idx != -1:
+                host = host_val[:colon_idx].decode("ascii", "ignore")
+                port = int(host_val[colon_idx + 1 :])
+            else:
+                host = host_val.decode("ascii", "ignore")
+        except Exception:
+            pass
+
+    try:
+        path = targ.decode("ascii", "ignore") or "/"
+    except Exception:
+        path = "/"
+    return host, port, path
+
+
 async def proxy(client_r, client_w):
-    """Handle proxy connections."""
+    """Handle proxy connections with minimal Python overhead."""
     global bw, total_requests, successful_requests, failed_requests
     total_requests += 1  # count connections (keep-alive aggregates requests)
-
     try:
         # Read the initial client request
         data = await asyncio.wait_for(client_r.read(1024), timeout=TIMEOUT)
@@ -111,50 +170,23 @@ async def proxy(client_r, client_w):
 
         if met == b'CONNECT':  # Handle HTTPS CONNECT requests
             try:
-                host, port = targ.split(b':')
+                host, port_b = targ.split(b':')
                 host_str = host.decode()
                 dom = canon(host_str)
-                remote_r, remote_w = await asyncio.open_connection(host_str, int(port))
+                remote_r, remote_w = await asyncio.open_connection(host_str, int(port_b))
                 client_w.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 await client_w.drain()
             except Exception as error:
-                print(f"Error connecting to {host.decode()}:{int(port)}: {error}")
+                print(f"Error connecting to {host.decode()}:{int(port_b)}: {error}")
                 client_w.write(RESP_502)
                 failed_requests += 1
                 return await client_w.drain()
         else:  # Handle HTTP GET/POST requests
-            targ_text = targ.decode()
-
-            host = DEFAULT_BACKEND_HOST
-            port = DEFAULT_BACKEND_PORT
-            path = "/"
-
-            if targ.startswith(b"http"):
-                # Fast path parse: http[s]://host[:port]/path
-                try:
-                    without_scheme = targ_text.split("://", 1)[1]
-                    hostport, _, rest = without_scheme.partition("/")
-                    if ":" in hostport:
-                        host, port_s = hostport.split(":", 1)
-                        port = int(port_s)
-                    else:
-                        host = hostport
-                    path = "/" + rest
-                except Exception:
-                    parsed_url = urlparse(targ_text)
-                    host = parsed_url.hostname or DEFAULT_BACKEND_HOST
-                    port = parsed_url.port or DEFAULT_BACKEND_PORT
-                    path = parsed_url.path or "/"
-            else:
-                parsed_url = urlparse(targ_text)
-                host = parsed_url.hostname or DEFAULT_BACKEND_HOST
-                port = parsed_url.port or DEFAULT_BACKEND_PORT
-                path = parsed_url.path or "/"
-
+            host, port, path = fast_parse_host(targ, data)
             dom = canon(host)
 
             # Reconstruct the full request if the URL is relative
-            if targ_text.startswith("/"):
+            if targ.startswith(b"/"):
                 req_lines = data.split(b"\r\n")
                 filtered_headers = [
                     line for line in req_lines[1:] if line and not line.lower().startswith(b"host:")
@@ -182,26 +214,24 @@ async def proxy(client_r, client_w):
         # Relay data between client and remote server
         async def relay(src_read, dest_write):
             global bw
-            flushed = 0
             try:
                 while True:
-                    chunk = await src_read.read(65536)
+                    chunk = await src_read.read(SOCK_BUF_SIZE)
                     if not chunk:
                         break
                     bw += len(chunk)
                     dest_write.write(chunk)
-                    flushed += 1
-                    if flushed & 7 == 0:  # amortize drain calls
-                        await dest_write.drain()
-                await dest_write.drain()
+                    await dest_write.drain()
             except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
                 pass
             finally:
-                dest_write.close()
+                try:
+                    dest_write.close()
+                except Exception:
+                    pass
 
-        # Start relaying data
-        to_client = asyncio.create_task(relay(client_r, remote_w))
-        to_remote = asyncio.create_task(relay(remote_r, client_w))
+        to_client = asyncio.create_task(relay(remote_r, client_w))
+        to_remote = asyncio.create_task(relay(client_r, remote_w))
         await asyncio.gather(to_client, to_remote)
 
         # Increment successful visits only if relay completes without errors

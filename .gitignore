@@ -1,0 +1,12 @@
+build/
+*.so
+*.c
+*.o
+__pycache__/
+*.pyc
+bench.log
+bench_connect.log
+*.pem
+*.pid
+tmp/
+*.egg-info/
