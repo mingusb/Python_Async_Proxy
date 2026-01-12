@@ -100,6 +100,11 @@ cdef inline void tune_socket(object sock):
     except Exception:
         pass
     try:
+        if hasattr(socket, "TCP_FASTOPEN_CONNECT"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_FASTOPEN_CONNECT, 1)
+    except Exception:
+        pass
+    try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUF_BYTES)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUF_BYTES)
     except Exception:
